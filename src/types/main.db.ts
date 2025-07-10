@@ -22,7 +22,7 @@ interface INote {
     content : string;
     attachment :string;
     visibility : string;
-    user_id : string; // <-- change to string
+    user_id : string; 
     post_id : number;
     parent_id : number | null;
     created_at : Date;

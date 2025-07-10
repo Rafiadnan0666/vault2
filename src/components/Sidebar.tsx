@@ -1,8 +1,10 @@
 'use client';
 import React, { useState, useEffect } from "react";
 import { useRouter } from 'next/navigation'; 
-import { FiHome, FiUsers, FiInbox, FiShoppingBag, FiLogOut, FiSearch, FiPlus, FiChevronDown, FiChevronUp } from "react-icons/fi";
+import { FiHome, FiUsers, FiMessageSquare, FiBell, FiPlusCircle, FiSearch, FiMenu, FiX, FiChevronDown, FiChevronUp, FiLogOut } from "react-icons/fi";
 import { createClient } from '@/utils/supabase/client';
+import { IoMdRocket } from "react-icons/io";
+import { RiCompassDiscoverLine } from "react-icons/ri";
 
 const Sidebar = () => {
   const router = useRouter();
@@ -12,18 +14,19 @@ const Sidebar = () => {
   const [isTeamsDropdownOpen, setIsTeamsDropdownOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [user, setUser] = useState<any>(null);
+  const [unreadCount, setUnreadCount] = useState(0);
 
   useEffect(() => {
-    const fetchUserAndTeams = async () => {
+    const fetchData = async () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (user) {
         setUser(user);
         
-        // Fetch teams where user is owner or member
-        const { data: teamsData } = await supabase
-          .from('teams')
-          .select('*')
-          .eq('owner_id', user.id);
+        // Fetch teams
+        // const { data: teamsData } = await supabase
+        //   .from('teams')
+        //   .select('*')
+        //   .eq('owner_id', user.id);
         
         const { data: memberTeams } = await supabase
           .from('member_team')
@@ -31,15 +34,24 @@ const Sidebar = () => {
           .eq('user_id', user.id);
         
         const allTeams = [
-          ...(teamsData || []),
+          // ...(teamsData || []),
           ...(memberTeams?.map((mt: any) => mt.teams).filter(Boolean) || [])
         ];
         
         setTeams(allTeams);
+
+        // Fetch unread messages (example)
+        const { count } = await supabase
+          .from('messages')
+          .select('*', { count: 'exact' })
+          .eq('receiver_id', user.id)
+          .eq('read', false);
+        
+        setUnreadCount(count || 0);
       }
     };
 
-    fetchUserAndTeams();
+    fetchData();
   }, [supabase]);
 
   const handleLogout = async () => {
@@ -49,7 +61,10 @@ const Sidebar = () => {
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
-    router.push(`/search?q=${searchQuery}`);
+    if (searchQuery.trim()) {
+      router.push(`/search?q=${encodeURIComponent(searchQuery)}`);
+      setIsMobileMenuOpen(false);
+    }
   };
 
   const navigateTo = (path: string) => {
@@ -59,181 +74,212 @@ const Sidebar = () => {
 
   return (
     <>
-      {/* Mobile menu button */}
-      <button
-        onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-        className="inline-flex items-center p-2 mt-2 ms-3 text-sm text-gray-500 rounded-lg md:hidden hover:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-gray-200 dark:text-gray-400 dark:hover:bg-gray-700 dark:focus:ring-gray-600"
-      >
-        <span className="sr-only">Open sidebar</span>
-        <svg
-          className="w-6 h-6"
-          aria-hidden="true"
-          fill="currentColor"
-          viewBox="0 0 20 20"
-          xmlns="http://www.w3.org/2000/svg"
-        >
-          <path
-            clipRule="evenodd"
-            fillRule="evenodd"
-            d="M2 4.75A.75.75 0 012.75 4h14.5a.75.75 0 010 1.5H2.75A.75.75 0 012 4.75zm0 10.5a.75.75 0 01.75-.75h7.5a.75.75 0 010 1.5h-7.5a.75.75 0 01-.75-.75zM2 10a.75.75 0 01.75-.75h14.5a.75.75 0 010 1.5H2.75A.75.75 0 012 10z"
-          />
-        </svg>
-      </button>
+      {/* Mobile header */}
+      <header className="md:hidden fixed top-0 left-0 right-0 z-40 bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-700">
+        <div className="flex items-center justify-between p-3">
+          <div className="flex items-center">
+            <button
+              onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+              className="p-2 rounded-md text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800"
+            >
+              {isMobileMenuOpen ? <FiX size={24} /> : <FiMenu size={24} />}
+            </button>
+            <div 
+              className="flex items-center ml-4 cursor-pointer"
+              onClick={() => navigateTo('/')}
+            >
+              <IoMdRocket className="text-orange-500 text-2xl" />
+              <span className="ml-2 font-bold text-lg dark:text-white">Ideas</span>
+            </div>
+          </div>
+          <div className="flex items-center space-x-2">
+            <button className="p-2 rounded-full hover:bg-gray-100 dark:hover:bg-gray-800">
+              <FiBell className="text-gray-700 dark:text-gray-200" />
+            </button>
+            {user && (
+              <div 
+                className="w-8 h-8 rounded-full bg-orange-500 flex items-center justify-center text-white font-medium cursor-pointer"
+                onClick={() => navigateTo('/profile')}
+              >
+                {user.email?.charAt(0).toUpperCase()}
+              </div>
+            )}
+          </div>
+        </div>
+      </header>
 
       {/* Sidebar */}
       <aside
-        id="default-sidebar"
-        className={`fixed top-0 left-0 z-40 w-64 h-screen transition-transform ${
+        className={`fixed top-0 left-0 z-30 w-64 h-screen bg-white dark:bg-gray-900 border-r border-gray-200 dark:border-gray-700 transition-transform duration-300 ease-in-out ${
           isMobileMenuOpen ? "translate-x-0" : "-translate-x-full"
         } md:translate-x-0`}
-        aria-label="Sidebar"
       >
-        <div className="h-full px-3 py-4 overflow-y-auto bg-gray-50 dark:bg-gray-800 flex flex-col">
+        <div className="h-full flex flex-col">
+          {/* Logo */}
+          <div 
+            className="flex items-center p-4 border-b border-gray-200 dark:border-gray-700 cursor-pointer"
+            onClick={() => navigateTo('/')}
+          >
+            <IoMdRocket className="text-orange-500 text-2xl" />
+            <span className="ml-2 font-bold text-xl dark:text-white">Ideas</span>
+          </div>
+
           {/* Search bar */}
-          <form onSubmit={handleSearch} className="mb-4 px-2">
-            <div className="relative">
-              <div className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none">
-                <FiSearch className="text-gray-500" />
-              </div>
+          <div className="p-3 border-b border-gray-200 dark:border-gray-700">
+            <form onSubmit={handleSearch} className="relative">
+              <FiSearch className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
               <input
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full pl-10 p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white"
-                placeholder="Search..."
+                className="w-full pl-10 pr-4 py-2 bg-gray-100 dark:bg-gray-800 rounded-full text-sm focus:outline-none focus:ring-2 focus:ring-orange-500"
+                placeholder="Search Reddit"
               />
-            </div>
-          </form>
+            </form>
+          </div>
 
           {/* Main navigation */}
-          <ul className="space-y-2 font-medium flex-grow">
-            <li>
-              <button
-                onClick={() => navigateTo('/dashboard')}
-                className="flex items-center p-2 text-gray-900 rounded-lg dark:text-white hover:bg-gray-100 dark:hover:bg-gray-700 group w-full"
-              >
-                <FiHome className="w-5 h-5 text-gray-500 transition duration-75 dark:text-gray-400 group-hover:text-gray-900 dark:group-hover:text-white" />
-                <span className="ms-3">Dashboard</span>
-              </button>
-            </li>
-            
-            <li>
-              <button
-                onClick={() => navigateTo('/explore')}
-                className="flex items-center p-2 text-gray-900 rounded-lg dark:text-white hover:bg-gray-100 dark:hover:bg-gray-700 group w-full"
-              >
-                <svg
-                  className="shrink-0 w-5 h-5 text-gray-500 transition duration-75 dark:text-gray-400 group-hover:text-gray-900 dark:group-hover:text-white"
-                  aria-hidden="true"
-                  xmlns="http://www.w3.org/2000/svg"
-                  fill="currentColor"
-                  viewBox="0 0 18 18"
+          <nav className="flex-1 overflow-y-auto py-2">
+            <ul className="space-y-1 px-2">
+              <li>
+                <button
+                  onClick={() => navigateTo('/dashboard')}
+                  className="w-full flex items-center p-2 rounded-md hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-900 dark:text-white"
                 >
-                  <path d="M6.143 0H1.857A1.857 1.857 0 0 0 0 1.857v4.286C0 7.169.831 8 1.857 8h4.286A1.857 1.857 0 0 0 8 6.143V1.857A1.857 1.857 0 0 0 6.143 0Zm10 0h-4.286A1.857 1.857 0 0 0 10 1.857v4.286C10 7.169 10.831 8 11.857 8h4.286A1.857 1.857 0 0 0 18 6.143V1.857A1.857 1.857 0 0 0 16.143 0Zm-10 10H1.857A1.857 1.857 0 0 0 0 11.857v4.286C0 17.169.831 18 1.857 18h4.286A1.857 1.857 0 0 0 8 16.143v-4.286A1.857 1.857 0 0 0 6.143 10Zm10 0h-4.286A1.857 1.857 0 0 0 10 11.857v4.286c0 1.026.831 1.857 1.857 1.857h4.286A1.857 1.857 0 0 0 18 16.143v-4.286A1.857 1.857 0 0 0 16.143 10Z" />
-                </svg>
-                <span className="flex-1 ms-3 whitespace-nowrap">Explore</span>
-              </button>
-            </li>
-
-            {/* Teams dropdown */}
-            <li>
-              <button
-                type="button"
-                onClick={() => setIsTeamsDropdownOpen(!isTeamsDropdownOpen)}
-                className="flex items-center justify-between w-full p-2 text-gray-900 rounded-lg dark:text-white hover:bg-gray-100 dark:hover:bg-gray-700"
-              >
-                <div className="flex items-center">
-                  <FiUsers className="w-5 h-5 text-gray-500 transition duration-75 dark:text-gray-400 group-hover:text-gray-900 dark:group-hover:text-white" />
-                  <span className="ms-3">Teams</span>
-                </div>
-                {isTeamsDropdownOpen ? (
-                  <FiChevronUp className="w-4 h-4" />
-                ) : (
-                  <FiChevronDown className="w-4 h-4" />
-                )}
-              </button>
-              {isTeamsDropdownOpen && (
-                <ul className="py-2 space-y-2 pl-11">
-                  {teams.map((team) => (
-                    <li key={team.id}>
+                  <FiHome className="text-lg" />
+                  <span className="ml-3">Home</span>
+                </button>
+              </li>
+              <li>
+                <button
+                  onClick={() => navigateTo('/explore')}
+                  className="w-full flex items-center p-2 rounded-md hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-900 dark:text-white"
+                >
+                  <RiCompassDiscoverLine className="text-lg" />
+                  <span className="ml-3">Explore</span>
+                </button>
+              </li>
+              <li>
+                <button
+                  type="button"
+                  onClick={() => setIsTeamsDropdownOpen(!isTeamsDropdownOpen)}
+                  className="w-full flex items-center justify-between p-2 rounded-md hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-900 dark:text-white"
+                >
+                  <div className="flex items-center">
+                    <FiUsers className="text-lg" />
+                    <span className="ml-3">Teams</span>
+                  </div>
+                  {isTeamsDropdownOpen ? (
+                    <FiChevronUp className="text-gray-500" />
+                  ) : (
+                    <FiChevronDown className="text-gray-500" />
+                  )}
+                </button>
+                {isTeamsDropdownOpen && (
+                  <ul className="ml-8 mt-1 space-y-1">
+                    {teams.map((team) => (
+                      <li key={team.id}>
+                        <button
+                          onClick={() => navigateTo(`/team/${team.id}`)}
+                          className="w-full flex items-center p-2 rounded-md hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-700 dark:text-gray-300 text-sm"
+                        >
+                          <span className="truncate">team/{team.name}</span>
+                        </button>
+                      </li>
+                    ))}
+                    <li>
                       <button
-                        onClick={() => navigateTo(`/team/${team.id}`)}
-                        className="flex items-center w-full p-2 text-gray-900 transition duration-75 rounded-lg pl-4 group hover:bg-gray-100 dark:text-white dark:hover:bg-gray-700"
+                        onClick={() => navigateTo('/team/create')}
+                        className="w-full flex items-center p-2 rounded-md hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-700 dark:text-gray-300 text-sm"
                       >
-                        {team.name}
+                        <FiPlusCircle className="mr-2" />
+                        Create Team
                       </button>
                     </li>
-                  ))}
-                  <li>
-                    <button
-                      onClick={() => navigateTo('/team/new')}
-                      className="flex items-center w-full p-2 text-gray-900 transition duration-75 rounded-lg pl-4 group hover:bg-gray-100 dark:text-white dark:hover:bg-gray-700"
-                    >
-                      <FiPlus className="mr-2" />
-                      Create Team
-                    </button>
-                  </li>
-                </ul>
-              )}
-            </li>
+                  </ul>
+                )}
+              </li>
+              <li>
+                <button
+                  onClick={() => navigateTo('/messages')}
+                  className="w-full flex items-center p-2 rounded-md hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-900 dark:text-white"
+                >
+                  <FiMessageSquare className="text-lg" />
+                  <span className="ml-3">Messages</span>
+                  {unreadCount > 0 && (
+                    <span className="ml-auto bg-orange-500 text-white text-xs font-bold px-2 py-1 rounded-full">
+                      {unreadCount}
+                    </span>
+                  )}
+                </button>
+              </li>
+              <li>
+                <button
+                  onClick={() => navigateTo('/notifications')}
+                  className="w-full flex items-center p-2 rounded-md hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-900 dark:text-white"
+                >
+                  <FiBell className="text-lg" />
+                  <span className="ml-3">Notifications</span>
+                </button>
+              </li>
+            </ul>
 
-            <li>
+            {/* Create post button */}
+            <div className="p-3 mt-4">
               <button
-                onClick={() => navigateTo('/inbox')}
-                className="flex items-center p-2 text-gray-900 rounded-lg dark:text-white hover:bg-gray-100 dark:hover:bg-gray-700 group w-full"
+                onClick={() => navigateTo('/submit')}
+                className="w-full bg-orange-500 hover:bg-orange-600 text-white rounded-full py-2 px-4 font-medium flex items-center justify-center"
               >
-                <FiInbox className="w-5 h-5 text-gray-500 transition duration-75 dark:text-gray-400 group-hover:text-gray-900 dark:group-hover:text-white" />
-                <span className="flex-1 ms-3 whitespace-nowrap">Inbox</span>
-                <span className="inline-flex items-center justify-center w-3 h-3 p-3 ms-3 text-sm font-medium text-blue-800 bg-blue-100 rounded-full dark:bg-blue-900 dark:text-blue-300">
-                  3
-                </span>
+                <FiPlusCircle className="mr-2" />
+                Create Post
               </button>
-            </li>
-            <li>
-              <button
-                onClick={() => navigateTo('/products')}
-                className="flex items-center p-2 text-gray-900 rounded-lg dark:text-white hover:bg-gray-100 dark:hover:bg-gray-700 group w-full"
-              >
-                <FiShoppingBag className="w-5 h-5 text-gray-500 transition duration-75 dark:text-gray-400 group-hover:text-gray-900 dark:group-hover:text-white" />
-                <span className="flex-1 ms-3 whitespace-nowrap">Products</span>
-              </button>
-            </li>
-          </ul>
+            </div>
+          </nav>
 
           {/* User section */}
-          <div className="pt-4 mt-auto border-t border-gray-200 dark:border-gray-700">
-            {user && (
-              <div className="flex items-center p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700">
-                <div className="relative w-8 h-8 overflow-hidden bg-gray-100 rounded-full dark:bg-gray-600 mr-3">
-                  <span className="font-medium text-gray-600 dark:text-gray-300 flex items-center justify-center h-full">
-                    {user.email?.charAt(0).toUpperCase()}
-                  </span>
+          {user && (
+            <div className="p-3 border-t border-gray-200 dark:border-gray-700">
+              <div className="flex items-center p-2 rounded-md hover:bg-gray-100 dark:hover:bg-gray-800 cursor-pointer">
+                <div 
+                  className="w-8 h-8 rounded-full bg-orange-500 flex items-center justify-center text-white font-medium"
+                  onClick={() => navigateTo('/profile')}
+                >
+                  {user.email?.charAt(0).toUpperCase()}
                 </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium text-gray-900 truncate dark:text-white">
+                <div 
+                  className="ml-3 flex-1 min-w-0"
+                  onClick={() => navigateTo('/profile')}
+                >
+                  <p className="text-sm font-medium text-gray-900 dark:text-white truncate">
                     {user.email}
                   </p>
+                  <p className="text-xs text-gray-500 dark:text-gray-400">1 karma</p>
                 </div>
                 <button
                   onClick={handleLogout}
-                  className="p-1 text-gray-500 rounded-lg hover:text-gray-900 dark:hover:text-white"
+                  className="p-2 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400"
                   title="Sign out"
                 >
                   <FiLogOut />
                 </button>
               </div>
-            )}
-          </div>
+            </div>
+          )}
         </div>
       </aside>
 
       {/* Overlay for mobile */}
       {isMobileMenuOpen && (
         <div
-          className="fixed inset-0 z-30 bg-black bg-opacity-50 md:hidden"
+          className="fixed inset-0 z-20 bg-black bg-opacity-50 md:hidden"
           onClick={() => setIsMobileMenuOpen(false)}
         />
       )}
+
+      {/* Main content area */}
+      <div className="md:ml-64 pt-16 md:pt-0">
+        {/* Your page content goes here */}
+      </div>
     </>
   );
 };

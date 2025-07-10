@@ -1,5 +1,6 @@
 'use client';
 import { useEffect, useState, useCallback } from 'react';
+
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/utils/supabase/client';
 import Layout from '@/components/Layout';
@@ -33,16 +34,15 @@ export default function MessagesPage() {
         return;
       }
 
-setAuthUser({
-  id: user.id,
-  email: user.email ?? '',
-  full_name: user.user_metadata?.full_name ?? '',
-  name: '',
-  password: '',
-  created_at: new Date(),
-  updated_at: new Date(),
-});
-
+      setAuthUser({
+        id: user.id,
+        email: user.email ?? '',
+        full_name: user.user_metadata?.full_name ?? '',
+        name: '',
+        password: '',
+        created_at: new Date(),
+        updated_at: new Date(),
+      });
     };
 
     fetchUser();
@@ -52,7 +52,6 @@ setAuthUser({
     if (!authUser) return;
     
     try {
-      // Fetch all conversations (users you've messaged or been messaged by)
       const { data: messagesData, error: messagesError } = await supabase
         .from('messages')
         .select('*')
@@ -61,14 +60,12 @@ setAuthUser({
 
       if (messagesError) throw messagesError;
 
-      // Get unique user IDs from conversations
       const userIds = new Set<string>();
       messagesData?.forEach(msg => {
         if (msg.from_id !== authUser.id) userIds.add(msg.from_id);
         if (msg.to_id !== authUser.id) userIds.add(msg.to_id);
       });
 
-      // Fetch user details for each conversation from profiles table
       const { data: profilesData, error: profilesError } = await supabase
         .from('profiles')
         .select('*')
@@ -76,7 +73,6 @@ setAuthUser({
 
       if (profilesError) throw profilesError;
 
-      // Map conversations with last message and user info
       const convs = Array.from(userIds).map(userId => {
         const user = profilesData?.find(u => u.id === userId);
         const lastMessage = messagesData?.find(msg => 
@@ -87,7 +83,6 @@ setAuthUser({
 
       setConversations(convs);
 
-      // If we have a selected user, load their messages
       if (selectedUser) {
         loadMessages(selectedUser.id);
       }
@@ -141,96 +136,184 @@ setAuthUser({
       return;
     }
     
-    try {
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('*')
-        .ilike('full_name', `%${query}%`)
-        .neq('id', authUser.id)
-        .limit(10);
+try {
+  const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(query);
 
-      if (error) throw error;
 
-      setSearchResults(data || []);
-    } catch (error) {
-      console.error('Error searching users:', error);
-      setError('Failed to search users');
+    // Coba cari berdasarkan ID persis dulu
+    const { data: exactIdData, error: exactIdError } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('id', query) // ID harus valid UUID
+      .neq('id', authUser.id)
+      .limit(1);
+
+    if (exactIdError) throw exactIdError;
+
+    if (exactIdData && exactIdData.length > 0) {
+      setSearchResults(exactIdData);
+      return;
     }
+  
+
+  // Kalau gak valid UUID atau gak ketemu ID-nya, cari berdasarkan nama/email
+  const { data: fuzzyData, error: fuzzyError } = await supabase
+    .from('profiles')
+    .select('*')
+    .or(`full_name.ilike.%${query}%,email.ilike.%${query}%`)
+    .neq('id', authUser.id)
+    .limit(10);
+
+  if (fuzzyError) throw fuzzyError;
+
+  if (fuzzyData && fuzzyData.length > 0) {
+    setSearchResults(fuzzyData);
+  } else {
+    throw new Error('User not found');
+  }
+} catch (error: any) {
+  console.error('Error searching users:', error.message || error);
+  setError('User not found');
+  setSearchResults([]);
+}
+
+
   }, [authUser, supabase]);
 
   useEffect(() => {
-    if (authUser) {
-      fetchConversations();
-      fetchNotifications();
-      setLoading(false);
+    if (!authUser) return;
 
-      // Set up real-time subscriptions
-      const messagesSubscription = supabase
-        .channel('messages_changes')
-        .on(
-          'postgres_changes',
-          {
-            event: '*',
-            schema: 'public',
-            table: 'messages',
-            filter: `or(to_id.eq.${authUser.id},from_id.eq.${authUser.id})`
-          },
-          (payload) => {
-            if (payload.eventType === 'INSERT') {
-              setMessages(prev => [...prev, payload.new as IMessage]);
-              fetchConversations();
+    // Initial data fetch
+    const fetchInitialData = async () => {
+      await fetchConversations();
+      await fetchNotifications();
+      setLoading(false);
+    };
+
+    fetchInitialData();
+
+    // Set up realtime subscriptions
+    const messagesChannel = supabase
+      .channel('realtime-messages')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'messages',
+          filter: `or(to_id.eq.${authUser.id},from_id.eq.${authUser.id})`
+        },
+        (payload) => {
+          switch (payload.eventType) {
+            case 'INSERT':
+              const newMessage = payload.new as IMessage;
+              setMessages(prev => [...prev, newMessage]);
               
-              // If this is a new message to us, create a notification
-              if (payload.new.to_id === authUser.id) {
+              // If this message is in the current conversation, scroll to it
+              if (selectedUser && 
+                  (newMessage.from_id === selectedUser.id || newMessage.to_id === selectedUser.id)) {
+                setTimeout(() => {
+                  const chatContainer = document.getElementById('messages-container');
+                  if (chatContainer) {
+                    chatContainer.scrollTop = chatContainer.scrollHeight;
+                  }
+                }, 100);
+              }
+              
+              // Update conversations list
+              setConversations(prev => {
+                const otherUserId = newMessage.from_id === authUser.id 
+                  ? newMessage.to_id 
+                  : newMessage.from_id;
+                
+                const existingConvIndex = prev.findIndex(c => c.user.id === otherUserId);
+                
+                if (existingConvIndex >= 0) {
+                  const updated = [...prev];
+                  updated[existingConvIndex] = {
+                    ...updated[existingConvIndex],
+                    lastMessage: newMessage
+                  };
+                  // Move to top
+                  const [moved] = updated.splice(existingConvIndex, 1);
+                  updated.unshift(moved);
+                  return updated;
+                } else {
+                  // New conversation - need to fetch user details
+                  supabase
+                    .from('profiles')
+                    .select('*')
+                    .eq('id', otherUserId)
+                    .single()
+                    .then(({ data: user }) => {
+                      if (user) {
+                        setConversations(prevConvs => [
+                          { user, lastMessage: newMessage },
+                          ...prevConvs
+                        ]);
+                      }
+                    });
+                  return prev;
+                }
+              });
+              
+              // Create notification if message is received
+              if (newMessage.to_id === authUser.id) {
                 createNotification(
-                  payload.new.from_id,
-                  'message',
-                  `New message from ${payload.new.from_id}`
+                  authUser.id,
+                  'new_message',
+                  `New message from ${newMessage.from_id === authUser.id ? 'You' : newMessage.from_id}`
                 );
               }
-            } else if (payload.eventType === 'UPDATE') {
+              break;
+
+            case 'UPDATE':
               setMessages(prev => prev.map(msg => 
                 msg.id === payload.new.id ? payload.new as IMessage : msg
               ));
-              fetchConversations();
-            } else if (payload.eventType === 'DELETE') {
-              setMessages(prev => prev.filter(msg => msg.id !== payload.old.id));
-              fetchConversations();
-            }
-          }
-        )
-        .subscribe();
+              break;
 
-      const notificationsSubscription = supabase
-        .channel('notifications_changes')
-        .on(
-          'postgres_changes',
-          {
-            event: '*',
-            schema: 'public',
-            table: 'notifications',
-            filter: `user_id.eq.${authUser.id}`
-          },
-          (payload) => {
-            if (payload.eventType === 'INSERT') {
+            case 'DELETE':
+              setMessages(prev => prev.filter(msg => msg.id !== payload.old.id));
+              break;
+          }
+        }
+      )
+      .subscribe();
+
+    const notificationsChannel = supabase
+      .channel('realtime-notifications')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'notifications',
+          filter: `user_id.eq.${authUser.id}`
+        },
+        (payload) => {
+          switch (payload.eventType) {
+            case 'INSERT':
               setNotifications(prev => [...prev, payload.new as INotification]);
-            } else if (payload.eventType === 'UPDATE') {
+              break;
+            case 'UPDATE':
               setNotifications(prev => prev.map(notif => 
                 notif.id === payload.new.id ? payload.new as INotification : notif
               ));
-            } else if (payload.eventType === 'DELETE') {
+              break;
+            case 'DELETE':
               setNotifications(prev => prev.filter(notif => notif.id !== payload.old.id));
-            }
+              break;
           }
-        )
-        .subscribe();
+        }
+      )
+      .subscribe();
 
-      return () => {
-        supabase.removeChannel(messagesSubscription);
-        supabase.removeChannel(notificationsSubscription);
-      };
-    }
-  }, [authUser, supabase, fetchConversations]);
+    return () => {
+      supabase.removeChannel(messagesChannel);
+      supabase.removeChannel(notificationsChannel);
+    };
+  }, [authUser, supabase, selectedUser]);
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -255,17 +338,6 @@ setAuthUser({
     }
   };
 
-  const markNotificationAsRead = async (notificationId: number) => {
-    try {
-      await supabase
-        .from('notifications')
-        .update({ read: true })
-        .eq('id', notificationId);
-    } catch (error) {
-      console.error('Error marking notification as read:', error);
-    }
-  };
-
   const handleSendMessage = async () => {
     if (!newMessage.trim() || !selectedUser || !authUser) return;
     
@@ -274,26 +346,19 @@ setAuthUser({
     
     try {
       if (editingMessage) {
-        // Update existing message
         const { error } = await supabase
           .from('messages')
           .update({
             content: newMessage,
-            attachment: newAttachment
+            attachment: newAttachment,
+            updated_at: new Date().toISOString()
           })
           .eq('id', editingMessage.id);
         
         if (error) throw error;
         
-        setMessages(prev => prev.map(msg => 
-          msg.id === editingMessage.id ? 
-          { ...msg, content: newMessage, attachment: newAttachment } : 
-          msg
-        ));
-        
         setEditingMessage(null);
       } else {
-        // Create new message
         const { data, error } = await supabase
           .from('messages')
           .insert({
@@ -307,7 +372,6 @@ setAuthUser({
         
         if (error) throw error;
 
-        // Create notification for the recipient
         await createNotification(
           selectedUser.id,
           'message',
@@ -412,7 +476,7 @@ setAuthUser({
                     <FiSearch className="absolute left-3 top-2.5 text-gray-400" />
                     <input
                       type="text"
-                      placeholder="Search users..."
+                      placeholder="Search by ID, name, or email..."
                       className="w-full pl-9 pr-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
@@ -434,7 +498,7 @@ setAuthUser({
                         </div>
                         <div>
                           <p className="font-medium">{user.full_name || user.email}</p>
-                          <p className="text-xs text-gray-500">Start conversation</p>
+                          <p className="text-xs text-gray-500">ID: {user.id}</p>
                         </div>
                       </div>
                     ))}
@@ -489,10 +553,14 @@ setAuthUser({
                       </div>
                       <div>
                         <p className="font-medium">{selectedUser.full_name || selectedUser.email}</p>
+                        <p className="text-xs text-gray-500">ID: {selectedUser.id}</p>
                       </div>
                     </div>
 
-                    <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                    <div 
+                      id="messages-container"
+                      className="flex-1 overflow-y-auto p-4 space-y-4"
+                    >
                       {messages.length === 0 ? (
                         <div className="text-center py-8 text-gray-500">
                           No messages yet. Start the conversation!
@@ -611,7 +679,7 @@ setAuthUser({
                         <FiSearch className="absolute left-3 top-3 text-gray-400" />
                         <input
                           type="text"
-                          placeholder="Search users..."
+                          placeholder="Search by ID, name, or email..."
                           className="w-full pl-9 pr-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                           value={searchQuery}
                           onChange={(e) => setSearchQuery(e.target.value)}
