@@ -2,6 +2,7 @@ interface IUser {
     id :string;
     name : string;
     email :string;
+    full_name : string;
     password : string;
     created_at : Date;
     updated_at : Date;
@@ -21,9 +22,9 @@ interface INote {
     content : string;
     attachment :string;
     visibility : string;
-    user_id : number;
+    user_id : string; // <-- change to string
     post_id : number;
-    parent_id : number;
+    parent_id : number | null;
     created_at : Date;
     updated_at : Date;
 }
@@ -66,20 +67,28 @@ interface IRole {
 
 interface IMessage {
     id : number;
-    from_id : number;
-    to_id : number;
+    from_id: string;  
+    to_id: string;
     content : string;
     attachment : string;
     created_at: Date;
 }
 
 interface ITeam_Message {
-    id : number;
-    team_id : number;
-    from_id : number;
-    content : string;
-    attachment : string;
+    id: number;
+    team_id: number;
+    from_id: number;
+    content: string;
+    attachment: string;
     created_at: Date;
+}
+
+interface IProfile {
+    id: string;
+    name: string;
+    avatar_url: string;
+    created_at: Date;
+    updated_at: Date;
 }
 
 export type {
@@ -93,3 +102,4 @@ export type {
     IMessage,
     ITeam_Message
 };
+

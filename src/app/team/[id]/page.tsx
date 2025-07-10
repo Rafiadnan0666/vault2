@@ -1,11 +1,22 @@
-import React, { Component } from 'react'
+'use client';
+import { useState, useEffect, useMemo } from "react";
+import { useUser } from "@supabase/auth-helpers-react";
+import {
+  IUser,
+  ITeam,
+  IMember_Team,
+  IRole,
+  IPost,
+} from "@/types/main.db";
+import { createClient } from "@/utils/supabase/client";
+import Layout from "@/components/Layout";
 
-const Team = () => {
-    return (
+export default function TeamPage({ teamId }: { teamId: string }) {
+  return (
+    <Layout>
       <div>
-        
-      </div>
-    )
-  }
 
-  export default Team
+      </div>
+    </Layout>
+  )
+}
