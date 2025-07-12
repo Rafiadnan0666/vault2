@@ -422,7 +422,7 @@ const Sidebar = () => {
                   )}
                 </button>
               </li>
-              <li>
+              {/* <li>
                 <button
                   onClick={() => navigateTo('/settings')}
                   className={`w-full flex items-center p-2 rounded-md hover:bg-gray-100 dark:hover:bg-gray-800 ${
@@ -434,7 +434,7 @@ const Sidebar = () => {
                   <FiSettings className="text-lg" />
                   <span className="ml-3">Settings</span>
                 </button>
-              </li>
+              </li> */}
             </ul>
 
             {/* Create post button */}

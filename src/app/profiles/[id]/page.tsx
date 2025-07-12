@@ -181,6 +181,7 @@ setAuthUser({
                   </div>
                 )}
                 <h2 className="text-xl font-semibold">{profile?.full_name || 'Anonymous'}</h2>
+                <small className='text-sm'>{profile?.id}</small>
                 <p className="text-sm text-gray-600">{profile?.email}</p>
                 {/* <button
                   onClick={openEditModal}

@@ -18,16 +18,16 @@ export function createActionClient() {
           return resolvedCookies.get(name)?.value;
         },
         // Crucial for actions that might modify auth state/refresh tokens
-        set(name: string, value: string, options: CookieOptions) {
+        async set(name: string, value: string, options: CookieOptions) {
           try {
-            cookieStore.set({ name, value, ...options });
+            (await cookieStore).set({ name, value, ...options });
           } catch (error) {
             console.error('Error setting cookie in action:', error);
           }
         },
-        remove(name: string, options: CookieOptions) {
+        async remove(name: string, options: CookieOptions) {
           try {
-            cookieStore.set({ name, value: '', ...options, maxAge: 0 });
+            (await cookieStore).set({ name, value: '', ...options, maxAge: 0 });
           } catch (error) {
             console.error('Error removing cookie in action:', error);
           }
