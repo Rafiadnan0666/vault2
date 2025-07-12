@@ -13,6 +13,7 @@ interface ITeam {
     name: string ;
     owner_id: string;
     description: string;
+    visibility: string;
     created_at: Date;
     updated_at: Date;
 }
@@ -36,7 +37,7 @@ interface IPost {
     attachment : string;
     visibility : string;
     slug: string;
-    user_id : number;
+    user_id : string;
     team_id : number;
     created_at : Date;
     updated_at : Date;
@@ -77,7 +78,7 @@ interface IMessage {
 interface ITeam_Message {
     id: number;
     team_id: number;
-    from_id: number;
+    from_id: string;
     content: string;
     attachment: string;
     created_at: Date;
@@ -85,6 +86,8 @@ interface ITeam_Message {
 
 interface IProfile {
     id: string;
+    full_name: string;
+    email: string;
     name: string;
     avatar_url: string;
     created_at: Date;
@@ -100,6 +103,7 @@ export type {
     IMember_Team,
     IRole,
     IMessage,
+    IProfile,
     ITeam_Message
 };
 

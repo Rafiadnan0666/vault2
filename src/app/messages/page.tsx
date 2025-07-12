@@ -1,6 +1,5 @@
 'use client';
-import { useEffect, useState, useCallback } from 'react';
-
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/utils/supabase/client';
 import Layout from '@/components/Layout';
@@ -25,303 +24,287 @@ export default function MessagesPage() {
 
   const router = useRouter();
   const supabase = createClient();
+  const refreshInterval = useRef<NodeJS.Timeout>();
 
-  useEffect(() => {
-    const fetchUser = async () => {
-      const { data: { user }, error } = await supabase.auth.getUser();
-      if (error || !user) {
-        router.push('/sign-in');
-        return;
-      }
+  // Optimized fetch functions with caching
+  const fetchUser = useCallback(async () => {
+    const { data: { user }, error } = await supabase.auth.getUser();
+    if (error || !user) {
+      router.push('/sign-in');
+      return null;
+    }
 
-      setAuthUser({
-        id: user.id,
-        email: user.email ?? '',
-        full_name: user.user_metadata?.full_name ?? '',
-        name: '',
-        password: '',
-        created_at: new Date(),
-        updated_at: new Date(),
-      });
+    return {
+      id: user.id,
+      email: user.email ?? '',
+      full_name: user.user_metadata?.full_name ?? '',
+      name: '',
+      password: '',
+      created_at: new Date(),
+      updated_at: new Date(),
     };
-
-    fetchUser();
   }, [router, supabase]);
 
-  const fetchConversations = useCallback(async () => {
-    if (!authUser) return;
-    
+  const fetchConversations = useCallback(async (userId: string) => {
     try {
+      // Only fetch messages from the last 30 days to reduce payload
+      const thirtyDaysAgo = new Date();
+      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+      
       const { data: messagesData, error: messagesError } = await supabase
         .from('messages')
         .select('*')
-        .or(`from_id.eq.${authUser.id},to_id.eq.${authUser.id}`)
-        .order('created_at', { ascending: false });
+        .or(`from_id.eq.${userId},to_id.eq.${userId}`)
+        .gte('created_at', thirtyDaysAgo.toISOString())
+        .order('created_at', { ascending: false })
+        .limit(100); // Limit to 100 most recent messages
 
       if (messagesError) throw messagesError;
 
       const userIds = new Set<string>();
       messagesData?.forEach(msg => {
-        if (msg.from_id !== authUser.id) userIds.add(msg.from_id);
-        if (msg.to_id !== authUser.id) userIds.add(msg.to_id);
+        if (msg.from_id !== userId) userIds.add(msg.from_id);
+        if (msg.to_id !== userId) userIds.add(msg.to_id);
       });
 
-      const { data: profilesData, error: profilesError } = await supabase
-        .from('profiles')
-        .select('*')
-        .in('id', Array.from(userIds));
+      if (userIds.size === 0) return [];
 
-      if (profilesError) throw profilesError;
+      // Cache user profiles in local storage
+      const cachedProfiles = localStorage.getItem('userProfiles');
+      let profilesData: IUser[] = [];
+      
+      if (cachedProfiles) {
+        const parsed = JSON.parse(cachedProfiles);
+        profilesData = Array.from(userIds)
+          .map(id => parsed[id])
+          .filter(Boolean);
+        
+        // Check if we have all needed profiles
+        if (profilesData.length === userIds.size) {
+          // All profiles are cached
+        } else {
+          // Fetch missing profiles
+          const missingIds = Array.from(userIds).filter(id => !parsed[id]);
+          const { data: fetchedProfiles, error: profilesError } = await supabase
+            .from('profiles')
+            .select('*')
+            .in('id', missingIds);
+
+          if (profilesError) throw profilesError;
+
+          profilesData = [...profilesData, ...(fetchedProfiles || [])];
+          
+          // Update cache
+          const newCache = {...parsed};
+          fetchedProfiles?.forEach(profile => {
+            newCache[profile.id] = profile;
+          });
+          localStorage.setItem('userProfiles', JSON.stringify(newCache));
+        }
+      } else {
+        // No cache, fetch all
+        const { data: fetchedProfiles, error: profilesError } = await supabase
+          .from('profiles')
+          .select('*')
+          .in('id', Array.from(userIds));
+
+        if (profilesError) throw profilesError;
+
+        profilesData = fetchedProfiles || [];
+        
+        // Create cache
+        const cache = profilesData.reduce((acc, profile) => {
+          acc[profile.id] = profile;
+          return acc;
+        }, {} as Record<string, IUser>);
+        localStorage.setItem('userProfiles', JSON.stringify(cache));
+      }
 
       const convs = Array.from(userIds).map(userId => {
-        const user = profilesData?.find(u => u.id === userId);
-        const lastMessage = messagesData?.find(msg => 
+        const user = profilesData.find(u => u.id === userId);
+        if (!user) return null;
+        
+        const lastMessage = messagesData.find(msg => 
           msg.from_id === userId || msg.to_id === userId
         );
-        return { user, lastMessage };
-      }).filter(conv => conv.user) as {user: IUser, lastMessage: IMessage}[];
+        return { user, lastMessage: lastMessage! };
+      }).filter(Boolean) as {user: IUser, lastMessage: IMessage}[];
 
-      setConversations(convs);
-
-      if (selectedUser) {
-        loadMessages(selectedUser.id);
-      }
+      return convs;
     } catch (error) {
       console.error('Error fetching conversations:', error);
       setError('Failed to load conversations');
+      return [];
     }
-  }, [authUser, supabase, selectedUser]);
+  }, [supabase]);
 
-  const loadMessages = useCallback(async (userId: string) => {
-    if (!authUser) return;
-    
+  const loadMessages = useCallback(async (userId: string, currentUserId: string) => {
     try {
+      // Only fetch messages from the last 30 days
+      const thirtyDaysAgo = new Date();
+      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+      
       const { data, error } = await supabase
         .from('messages')
         .select('*')
-        .or(`and(from_id.eq.${authUser.id},to_id.eq.${userId}),and(from_id.eq.${userId},to_id.eq.${authUser.id})`)
+        .or(
+          `and(from_id.eq.${currentUserId},to_id.eq.${userId}),and(from_id.eq.${userId},to_id.eq.${currentUserId})`
+        )
+        .gte('created_at', thirtyDaysAgo.toISOString())
         .order('created_at', { ascending: true });
 
       if (error) throw error;
 
-      setMessages(data || []);
+      return data || [];
     } catch (error) {
       console.error('Error loading messages:', error);
       setError('Failed to load messages');
+      return [];
     }
-  }, [authUser, supabase]);
+  }, [supabase]);
 
-  const fetchNotifications = useCallback(async () => {
-    if (!authUser) return;
-    
+  const fetchNotifications = useCallback(async (userId: string) => {
     try {
       const { data, error } = await supabase
         .from('notifications')
         .select('*')
-        .eq('user_id', authUser.id)
+        .eq('user_id', userId)
         .eq('read', false)
-        .order('created_at', { ascending: false });
+        .order('created_at', { ascending: false })
+        .limit(20); // Only get the 20 most recent unread notifications
 
       if (error) throw error;
 
-      setNotifications(data || []);
+      return data || [];
     } catch (error) {
       console.error('Error fetching notifications:', error);
+      return [];
     }
-  }, [authUser, supabase]);
+  }, [supabase]);
 
-  const searchUsers = useCallback(async (query: string) => {
-    if (!query.trim() || !authUser) {
-      setSearchResults([]);
-      return;
+  const searchUsers = useCallback(async (query: string, currentUserId: string) => {
+    if (!query.trim()) {
+      return [];
     }
-    
-try {
-  const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(query);
 
+    try {
+      const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(query);
 
-    // Coba cari berdasarkan ID persis dulu
-    const { data: exactIdData, error: exactIdError } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('id', query) // ID harus valid UUID
-      .neq('id', authUser.id)
-      .limit(1);
+      // Try exact ID match first
+      if (isUUID) {
+        const { data: exactIdData, error: exactIdError } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', query)
+          .neq('id', currentUserId)
+          .limit(1);
 
-    if (exactIdError) throw exactIdError;
+        if (exactIdError) throw exactIdError;
 
-    if (exactIdData && exactIdData.length > 0) {
-      setSearchResults(exactIdData);
-      return;
+        if (exactIdData && exactIdData.length > 0) {
+          return exactIdData;
+        }
+      }
+
+      // Fall back to fuzzy search
+      const { data: fuzzyData, error: fuzzyError } = await supabase
+        .from('profiles')
+        .select('*')
+        .or(`full_name.ilike.%${query}%,email.ilike.%${query}%`)
+        .neq('id', currentUserId)
+        .limit(10);
+
+      if (fuzzyError) throw fuzzyError;
+
+      return fuzzyData || [];
+    } catch (error) {
+      console.error('Error searching users:', error);
+      return [];
     }
-  
+  }, [supabase]);
 
-  // Kalau gak valid UUID atau gak ketemu ID-nya, cari berdasarkan nama/email
-  const { data: fuzzyData, error: fuzzyError } = await supabase
-    .from('profiles')
-    .select('*')
-    .or(`full_name.ilike.%${query}%,email.ilike.%${query}%`)
-    .neq('id', authUser.id)
-    .limit(10);
-
-  if (fuzzyError) throw fuzzyError;
-
-  if (fuzzyData && fuzzyData.length > 0) {
-    setSearchResults(fuzzyData);
-  } else {
-    throw new Error('User not found');
-  }
-} catch (error: any) {
-  console.error('Error searching users:', error.message || error);
-  setError('User not found');
-  setSearchResults([]);
-}
-
-
-  }, [authUser, supabase]);
-
-  useEffect(() => {
+  // Optimized refresh function
+  const refreshData = useCallback(async () => {
     if (!authUser) return;
 
-    // Initial data fetch
-    const fetchInitialData = async () => {
-      await fetchConversations();
-      await fetchNotifications();
-      setLoading(false);
-    };
+    try {
+      const [newConvs, newNotifs] = await Promise.all([
+        fetchConversations(authUser.id),
+        fetchNotifications(authUser.id)
+      ]);
 
-    fetchInitialData();
-
-    // Set up realtime subscriptions
-    const messagesChannel = supabase
-      .channel('realtime-messages')
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'messages',
-          filter: `or(to_id.eq.${authUser.id},from_id.eq.${authUser.id})`
-        },
-        (payload) => {
-          switch (payload.eventType) {
-            case 'INSERT':
-              const newMessage = payload.new as IMessage;
-              setMessages(prev => [...prev, newMessage]);
-              
-              // If this message is in the current conversation, scroll to it
-              if (selectedUser && 
-                  (newMessage.from_id === selectedUser.id || newMessage.to_id === selectedUser.id)) {
-                setTimeout(() => {
-                  const chatContainer = document.getElementById('messages-container');
-                  if (chatContainer) {
-                    chatContainer.scrollTop = chatContainer.scrollHeight;
-                  }
-                }, 100);
-              }
-              
-              // Update conversations list
-              setConversations(prev => {
-                const otherUserId = newMessage.from_id === authUser.id 
-                  ? newMessage.to_id 
-                  : newMessage.from_id;
-                
-                const existingConvIndex = prev.findIndex(c => c.user.id === otherUserId);
-                
-                if (existingConvIndex >= 0) {
-                  const updated = [...prev];
-                  updated[existingConvIndex] = {
-                    ...updated[existingConvIndex],
-                    lastMessage: newMessage
-                  };
-                  // Move to top
-                  const [moved] = updated.splice(existingConvIndex, 1);
-                  updated.unshift(moved);
-                  return updated;
-                } else {
-                  // New conversation - need to fetch user details
-                  supabase
-                    .from('profiles')
-                    .select('*')
-                    .eq('id', otherUserId)
-                    .single()
-                    .then(({ data: user }) => {
-                      if (user) {
-                        setConversations(prevConvs => [
-                          { user, lastMessage: newMessage },
-                          ...prevConvs
-                        ]);
-                      }
-                    });
-                  return prev;
-                }
-              });
-              
-              // Create notification if message is received
-              if (newMessage.to_id === authUser.id) {
-                createNotification(
-                  authUser.id,
-                  'new_message',
-                  `New message from ${newMessage.from_id === authUser.id ? 'You' : newMessage.from_id}`
-                );
-              }
-              break;
-
-            case 'UPDATE':
-              setMessages(prev => prev.map(msg => 
-                msg.id === payload.new.id ? payload.new as IMessage : msg
-              ));
-              break;
-
-            case 'DELETE':
-              setMessages(prev => prev.filter(msg => msg.id !== payload.old.id));
-              break;
-          }
+      setConversations(prev => {
+        // Only update if there are actual changes
+        if (JSON.stringify(prev) !== JSON.stringify(newConvs)) {
+          return newConvs;
         }
-      )
-      .subscribe();
+        return prev;
+      });
 
-    const notificationsChannel = supabase
-      .channel('realtime-notifications')
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'notifications',
-          filter: `user_id.eq.${authUser.id}`
-        },
-        (payload) => {
-          switch (payload.eventType) {
-            case 'INSERT':
-              setNotifications(prev => [...prev, payload.new as INotification]);
-              break;
-            case 'UPDATE':
-              setNotifications(prev => prev.map(notif => 
-                notif.id === payload.new.id ? payload.new as INotification : notif
-              ));
-              break;
-            case 'DELETE':
-              setNotifications(prev => prev.filter(notif => notif.id !== payload.old.id));
-              break;
-          }
+      setNotifications(prev => {
+        if (JSON.stringify(prev) !== JSON.stringify(newNotifs)) {
+          return newNotifs;
         }
-      )
-      .subscribe();
+        return prev;
+      });
 
-    return () => {
-      supabase.removeChannel(messagesChannel);
-      supabase.removeChannel(notificationsChannel);
-    };
-  }, [authUser, supabase, selectedUser]);
+      if (selectedUser) {
+        const newMessages = await loadMessages(selectedUser.id, authUser.id);
+        setMessages(prev => {
+          if (JSON.stringify(prev) !== JSON.stringify(newMessages)) {
+            return newMessages;
+          }
+          return prev;
+        });
+      }
+    } catch (error) {
+      console.error('Refresh error:', error);
+    }
+  }, [authUser, fetchConversations, fetchNotifications, loadMessages, selectedUser]);
 
+  // Setup refresh interval
   useEffect(() => {
-    const timer = setTimeout(() => {
-      searchUsers(searchQuery);
+    if (authUser) {
+      // Initial load
+      refreshData();
+      
+      // Set up interval for refreshing
+      refreshInterval.current = setInterval(refreshData, 2500);
+      
+      return () => {
+        if (refreshInterval.current) {
+          clearInterval(refreshInterval.current);
+        }
+      };
+    }
+  }, [authUser, refreshData]);
+
+  // Initial auth check
+  useEffect(() => {
+    const initialize = async () => {
+      const user = await fetchUser();
+      if (user) {
+        setAuthUser(user);
+        setLoading(false);
+      }
+    };
+
+    initialize();
+  }, [fetchUser]);
+
+  // Search debounce
+  useEffect(() => {
+    const timer = setTimeout(async () => {
+      if (searchQuery.trim() && authUser) {
+        const results = await searchUsers(searchQuery, authUser.id);
+        setSearchResults(results);
+      } else {
+        setSearchResults([]);
+      }
     }, 300);
 
     return () => clearTimeout(timer);
-  }, [searchQuery, searchUsers]);
+  }, [searchQuery, authUser, searchUsers]);
 
   const createNotification = async (userId: string, type: string, payload: string) => {
     try {
@@ -381,6 +364,9 @@ try {
       
       setNewMessage('');
       setNewAttachment('');
+      
+      // Trigger immediate refresh after sending
+      refreshData();
     } catch (error: any) {
       console.error('Error sending message:', error);
       setError(error.message || 'Failed to send message');
@@ -399,17 +385,21 @@ try {
         .eq('id', messageId);
       
       if (error) throw error;
+      
+      // Trigger immediate refresh after deletion
+      refreshData();
     } catch (error) {
       console.error('Error deleting message:', error);
       setError('Failed to delete message');
     }
   };
 
-  const startConversation = (user: IUser) => {
+  const startConversation = async (user: IUser) => {
     setSelectedUser(user);
     setSearchQuery('');
     setSearchResults([]);
-    loadMessages(user.id);
+    const messages = await loadMessages(user.id, authUser?.id || '');
+    setMessages(messages);
   };
 
   if (loading) {
