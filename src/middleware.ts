@@ -57,7 +57,9 @@ export async function middleware(request: NextRequest) {
   if (path === '/') {
     if (session) {
       // If logged in, rewrite to the authenticated homepage without changing URL
-      return NextResponse.rewrite(new URL('/user-home-page', request.url));
+      return NextResponse.rewrite(new URL('/dashboard', request.url));
+    }else {
+      return NextResponse.rewrite(new URL('/sign-up', request.url));
     }
     // If not logged in, continue to show the default homepage (no action needed)
   }

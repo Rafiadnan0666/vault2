@@ -2,7 +2,6 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
-import Image from 'next/image';
 import { createClient } from '@/utils/supabase/client';
 
 export default function ResetPassword() {
@@ -19,92 +18,90 @@ export default function ResetPassword() {
     setError(null);
     setMessage(null);
 
-    const { error } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: `${window.location.origin}/update-password`,
-    });
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: `${window.location.origin}/update-password`,
+      });
 
-    if (error) {
-      setError(error.message);
+      if (error) {
+        setError(error.message);
+        return;
+      }
+
+      setMessage('Password reset link sent - please check your email');
+    } catch (err) {
+      setError('An unexpected error occurred');
+    } finally {
       setLoading(false);
-      return;
     }
-
-    setMessage('Check your email for the password reset link');
-    setLoading(false);
   };
 
   return (
-    <div className="flex min-h-screen">
-      {/* Left: Image / Info */}
-      <div
-        className="flex min-h-screen w-1/2 items-center justify-center bg-cover bg-center bg-no-repeat px-6 text-white sm:px-8"
-        style={{ backgroundImage: "url('/assets/banner.png')" }}
-      >
-        <div className="max-w-md space-y-4 px-8 text-center">
-          <Link href="/" className="flex items-center gap-2">
-            <Image
-              src="/next.svg"
-              className="mx-auto"
-              priority
-              alt="Logo"
-              width={120}
-              height={32}
-            />
-          </Link>
-          <h2 className="text-2xl font-bold">Reset your password</h2>
-          <p>We'll send you a link to reset your password.</p>
-        </div>
-      </div>
-      {/* Right: Reset Form */}
-      <div className="flex w-1/2 flex-col items-center justify-center bg-white px-10">
-        <div className="w-full max-w-md space-y-6">
-          <h1 className="text-center text-2xl font-bold text-gray-900">Forgot Your Password?</h1>
-          <p className="text-center text-sm text-gray-500">
-            Enter your email and we'll send you a link to reset your password.
+    <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-blue-50 via-purple-50 to-indigo-50 bg-[length:200%_200%] animate-gradient-shift p-4">
+      <div className="w-full max-w-md space-y-6 rounded-xl bg-white/90 p-8 shadow-lg backdrop-blur-sm">
+        <div className="text-center">
+          <h1 className="text-3xl font-bold text-gray-900">Reset Password</h1>
+          <p className="mt-2 text-gray-600">
+            Enter your email to receive a password reset link
           </p>
+        </div>
 
-          <div className="rounded-xl border px-6 py-4 shadow-lg">
-            {error && (
-              <div className="mb-4 rounded-md bg-red-50 p-3 text-sm text-red-600">{error}</div>
-            )}
-
-            {message && (
-              <div className="mb-4 rounded-md bg-green-50 p-3 text-sm text-green-600">
-                {message}
-              </div>
-            )}
-
-            <form onSubmit={handleResetPassword} className="space-y-4">
-              <div>
-                <label htmlFor="email" className="mb-1 block text-sm font-medium">
-                  Email
-                </label>
-                <input
-                  id="email"
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  className="w-full rounded-md border px-3 py-2"
-                  required
-                />
-              </div>
-
-              <button
-                type="submit"
-                disabled={loading}
-                className="w-full rounded-md bg-black py-2 text-white hover:bg-gray-800"
-              >
-                {loading ? 'Sending link...' : 'Send Reset Link'}
-              </button>
-            </form>
-
-            <div className="mt-4 text-center">
-              <span className="text-sm text-gray-500">Remember your password? </span>
-              <Link href="/sign-in" className="text-sm text-blue-600 hover:underline">
-                Sign in
-              </Link>
-            </div>
+        {error && (
+          <div className="rounded-md bg-red-50 p-3 text-sm text-red-600">
+            {error}
           </div>
+        )}
+
+        {message && (
+          <div className="rounded-md bg-green-50 p-3 text-sm text-green-600">
+            {message}
+          </div>
+        )}
+
+        <form onSubmit={handleResetPassword} className="space-y-4">
+          <div>
+            <label htmlFor="email" className="mb-1 block text-sm font-medium text-gray-700">
+              Email address
+            </label>
+            <input
+              id="email"
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              className="w-full rounded-lg border border-gray-300 px-4 py-2 focus:border-blue-500 focus:ring-blue-500"
+              required
+              autoComplete="email"
+              placeholder="you@example.com"
+            />
+          </div>
+
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full rounded-lg bg-blue-600 py-2 px-4 font-medium text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50"
+          >
+            {loading ? (
+              <span className="flex items-center justify-center">
+                <svg className="mr-2 h-4 w-4 animate-spin" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                Sending...
+              </span>
+            ) : (
+              'Send Reset Link'
+            )}
+          </button>
+        </form>
+
+        <div className="text-center text-sm text-gray-600">
+          Remember your password?{' '}
+          <Link 
+            href="/sign-in" 
+            className="font-medium text-blue-600 hover:text-blue-500"
+          >
+            Sign in here
+          </Link>
         </div>
       </div>
     </div>

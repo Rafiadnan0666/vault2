@@ -3,9 +3,8 @@ import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/utils/supabase/client';
 import Layout from '@/components/Layout';
-import type { IPost, INote,IUser } from '@/types/main.db';
-import { FiArrowUp, FiArrowDown, FiMessageSquare, FiShare2, FiBookmark, FiMoreHorizontal } from 'react-icons/fi';
-// import { FaReddit } from 'react-icons/fa';
+import type { IPost, INote, IUser, ITeam } from '@/types/main.db';
+import { FiArrowUp, FiArrowDown, FiMessageSquare, FiShare2, FiBookmark, FiMoreHorizontal, FiUsers } from 'react-icons/fi';
 import { formatDistanceToNow } from 'date-fns';
 import Link from 'next/link';
 
@@ -13,6 +12,7 @@ export default function Explore() {
   const [authUser, setAuthUser] = useState<IUser | null>(null);
   const [loading, setLoading] = useState(true);
   const [posts, setPosts] = useState<IPost[]>([]);
+  const [teams, setTeams] = useState<ITeam[]>([]);
   const [notesCount, setNotesCount] = useState<{[key: number]: number}>({});
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(true);
@@ -21,7 +21,8 @@ export default function Explore() {
     title: '',
     content: '',
     attachment: '',
-    visibility: 'public'
+    visibility: 'public',
+    team_id: null as number | null
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -40,7 +41,7 @@ export default function Explore() {
         id: user.id,
         email: user.email ?? '',
         full_name: user.user_metadata?.full_name ?? '',
-        name: '',
+        name: user.user_metadata?.name ?? '',
         password: '',
         created_at: new Date(),
         updated_at: new Date(),
@@ -51,6 +52,21 @@ export default function Explore() {
     fetchUser();
   }, [router, supabase]);
 
+  const fetchPublicTeams = useCallback(async () => {
+    try {
+      const { data: teamsData, error } = await supabase
+        .from('teams')
+        .select('*')
+        .eq('visibility', 'public')
+        .order('created_at', { ascending: false });
+      
+      if (error) throw error;
+      if (teamsData) setTeams(teamsData);
+    } catch (error) {
+      console.error('Error fetching public teams:', error);
+    }
+  }, [supabase]);
+
   const fetchPosts = useCallback(async (pageNum: number) => {
     if (!authUser) return;
     
@@ -60,6 +76,7 @@ export default function Explore() {
       const { data: postsData } = await supabase
         .from('posts')
         .select('*')
+        .eq('visibility', 'public')
         .order('created_at', { ascending: false })
         .range((pageNum - 1) * 10, pageNum * 10 - 1);
       
@@ -70,15 +87,15 @@ export default function Explore() {
 
       // Fetch notes count for each post
       const postIds = postsData.map(post => post.id);
-     // Fetch notes for these posts
-const { data: notesData } = await supabase
-  .from('notes')
-  .select('post_id');
+      const { data: notesData } = await supabase
+        .from('notes')
+        .select('post_id')
+        .in('post_id', postIds);
 
-const countsMap: { [key: number]: number } = {};
-notesData?.forEach(item => {
-  countsMap[item.post_id] = (countsMap[item.post_id] || 0) + 1;
-});
+      const countsMap: { [key: number]: number } = {};
+      notesData?.forEach(item => {
+        countsMap[item.post_id] = (countsMap[item.post_id] || 0) + 1;
+      });
 
       if (pageNum === 1) {
         setPosts(postsData);
@@ -99,7 +116,8 @@ notesData?.forEach(item => {
 
   useEffect(() => {
     fetchPosts(page);
-  }, [page, fetchPosts]);
+    fetchPublicTeams();
+  }, [page, fetchPosts, fetchPublicTeams]);
 
   const handleScroll = useCallback(() => {
     if (loading || !hasMore) return;
@@ -120,6 +138,10 @@ notesData?.forEach(item => {
     
     setIsSubmitting(true);
     try {
+      const randomSuffix = Math.floor(Math.random() * 1000);
+      const slugBase = newPost.title.toLowerCase().replace(/\s+/g, '-').replace(/[^\w-]+/g, '');
+      const slug = `${slugBase}-${randomSuffix}`;
+
       const { data, error } = await supabase
         .from('posts')
         .insert({
@@ -128,7 +150,8 @@ notesData?.forEach(item => {
           attachment: newPost.attachment,
           visibility: newPost.visibility,
           user_id: authUser.id,
-          slug: newPost.title.toLowerCase().replace(/\s+/g, '-').replace(/[^\w-]+/g, '')
+          team_id: newPost.team_id,
+          slug: slug
         })
         .select()
         .single();
@@ -142,7 +165,8 @@ notesData?.forEach(item => {
           title: '',
           content: '',
           attachment: '',
-          visibility: 'public'
+          visibility: 'public',
+          team_id: null
         });
       }
     } catch (error) {
@@ -269,7 +293,7 @@ notesData?.forEach(item => {
             <div className="bg-white rounded-md shadow">
               <div className="p-2 flex items-center">
                 <div className="w-8 h-8 rounded-full bg-blue-500 flex items-center justify-center text-white mr-2">
-                  {/* <FaReddit size={20} /> */}
+                  {authUser?.name?.charAt(0) || authUser?.full_name?.charAt(0) || 'U'}
                 </div>
                 <input
                   type="text"
@@ -281,52 +305,61 @@ notesData?.forEach(item => {
               </div>
             </div>
 
-             <div className="space-y-4"> {/* Added space-y for vertical spacing between posts */}
-      {posts.map(post => (
-        <Link key={post.id} href={`/post/${post.slug}`} className="block"> {/* Make the whole card clickable */}
-          <div className="bg-white rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200 overflow-hidden border border-gray-200">
-            <div className="flex">
-              {/* Vote sidebar - Adjusted width and spacing */}
-              <div className="bg-gray-50 p-3 flex flex-col items-center justify-start w-14 border-r border-gray-200">
-                <span className="text-sm font-bold text-gray-700 mt-2">{notesCount[post.id] || 0}</span>
-                <span className="text-xs text-gray-500">Notes</span>
-              </div>
+            <div className="space-y-4">
+              {posts.map(post => (
+                <Link key={post.id} href={`/post/${post.slug}`} className="block">
+                  <div className="bg-white rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200 overflow-hidden border border-gray-200">
+                    <div className="flex">
+                      {/* Vote sidebar */}
+                      <div className="bg-gray-50 p-3 flex flex-col items-center justify-start w-14 border-r border-gray-200">
+                        <span className="text-sm font-bold text-gray-700 mt-2">{notesCount[post.id] || 0}</span>
+                        <span className="text-xs text-gray-500">Notes</span>
+                      </div>
 
-              <div className="flex-1 p-4 sm:p-5"> {/* Increased padding for better breathing room */}
-                {/* Post header */}
-                <div className="flex items-center text-sm text-gray-500 mb-2">
-                  <span className="font-semibold text-gray-800">Posted by u/{post.user_id}</span>
-                  <span className="mx-1.5">•</span> {/* Slightly more space */}
-                  <span>{formatDistanceToNow(new Date(post.created_at), { addSuffix: true })}</span>
-                </div>
+                      <div className="flex-1 p-4 sm:p-5">
+                        {/* Post header */}
+                        <div className="flex items-center text-sm text-gray-500 mb-2">
+                          <span className="font-semibold text-gray-800">Posted by u/{post.user_id}</span>
+                          <span className="mx-1.5">•</span>
+                          <span>{formatDistanceToNow(new Date(post.created_at), { addSuffix: true })}</span>
+                          {post.team_id && (
+                            <>
+                              <span className="mx-1.5">•</span>
+                              <span className="flex items-center text-blue-500">
+                                <FiUsers className="mr-1" />
+                                {teams.find(t => t.id === post.team_id)?.name || 'Team'}
+                              </span>
+                            </>
+                          )}
+                        </div>
 
-                {/* Post title and content */}
-                <h3 className="text-xl font-bold text-gray-900 mb-2 leading-tight">{post.title}</h3> {/* Larger title, bolder, tighter line height */}
-                {post.content && <p className="text-base text-gray-700 mb-3 line-clamp-3">{post.content}</p>} {/* Slightly larger text, line-clamp for content */}
+                        {/* Post title and content */}
+                        <h3 className="text-xl font-bold text-gray-900 mb-2 leading-tight">{post.title}</h3>
+                        {post.content && <p className="text-base text-gray-700 mb-3 line-clamp-3">{post.content}</p>}
 
-                {/* Attachment preview */}
-                {post.attachment && renderAttachmentPreview(post)}
+                        {/* Attachment preview */}
+                        {post.attachment && renderAttachmentPreview(post)}
 
-                {/* Post actions */}
-                <div className="flex items-center mt-4 text-sm text-gray-500 border-t border-gray-100 pt-3"> {/* Separator line for actions */}
-                  <button className="flex items-center mr-5 hover:bg-gray-100 p-2 rounded-md transition-colors duration-150"> {/* Increased padding, rounded corners, transition */}
-                    <FiMessageSquare className="mr-2 text-base" /> {/* Larger icon */}
-                    <span>{notesCount[post.id] || 0} Comments</span>
-                  </button>
-                  <button className="flex items-center mr-5 hover:bg-gray-100 p-2 rounded-md transition-colors duration-150">
-                    <FiShare2 className="mr-2 text-base" />
-                    <span>Share</span>
-                  </button>
-                  <button className="flex items-center hover:bg-gray-100 p-2 rounded-md transition-colors duration-150">
-                    <FiMoreHorizontal className="text-base" />
-                  </button>
-                </div>
-              </div>
+                        {/* Post actions */}
+                        <div className="flex items-center mt-4 text-sm text-gray-500 border-t border-gray-100 pt-3">
+                          <button className="flex items-center mr-5 hover:bg-gray-100 p-2 rounded-md transition-colors duration-150">
+                            <FiMessageSquare className="mr-2 text-base" />
+                            <span>{notesCount[post.id] || 0} Comments</span>
+                          </button>
+                          <button className="flex items-center mr-5 hover:bg-gray-100 p-2 rounded-md transition-colors duration-150">
+                            <FiShare2 className="mr-2 text-base" />
+                            <span>Share</span>
+                          </button>
+                          <button className="flex items-center hover:bg-gray-100 p-2 rounded-md transition-colors duration-150">
+                            <FiMoreHorizontal className="text-base" />
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </Link>
+              ))}
             </div>
-          </div>
-        </Link>
-      ))}
-    </div>
 
             {loading && page > 1 && (
               <div className="flex justify-center py-4">
@@ -348,36 +381,53 @@ notesData?.forEach(item => {
               <div className="bg-blue-500 h-16"></div>
               <div className="p-4">
                 <div className="flex items-center mb-4">
-                  {/* <FaReddit size={40} className="text-blue-500 -mt-5 bg-white rounded-full p-1 border-4 border-white" /> */}
-                  <h3 className="ml-2 font-medium">Home</h3>
+                  <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center text-blue-500 -mt-5 border-4 border-white">
+                    <FiUsers size={20} />
+                  </div>
+                  <h3 className="ml-2 font-medium">Explore</h3>
                 </div>
                 <p className="text-sm text-gray-700 mb-4">
-                  Your personal Reddit frontpage. Come here to check in with your favorite communities.
+                  Browse public posts and teams. Join communities to see more content.
                 </p>
                 <div className="space-y-3">
-                  <button className="w-full bg-blue-500 text-white py-1 px-4 rounded-full text-sm font-medium hover:bg-blue-600"  onClick={() => setShowCreatePost(true)}>
+                  <button 
+                    className="w-full bg-blue-500 text-white py-1 px-4 rounded-full text-sm font-medium hover:bg-blue-600"
+                    onClick={() => setShowCreatePost(true)}
+                  >
                     Create Post
-                  </button>
-                  <button className="w-full bg-gray-200 text-gray-800 py-1 px-4 rounded-full text-sm font-medium hover:bg-gray-300">
-                    Create Community
                   </button>
                 </div>
               </div>
             </div>
 
-            {/* Premium */}
+            {/* Public Teams */}
             <div className="bg-white rounded-md shadow overflow-hidden">
-              <div className="p-3 bg-orange-100 flex items-center">
-                {/* <FaReddit size={20} className="text-orange-500 mr-2" /> */}
-                <div className="text-sm">
-                  <p className="font-medium">Reddit Premium</p>
-                  <p className="text-xs">The best Reddit experience</p>
-                </div>
+              <div className="p-3 bg-gray-100 border-b">
+                <h3 className="font-medium">Public Teams</h3>
               </div>
-              <div className="p-3">
-                <button className="w-full bg-orange-500 text-white py-1 px-4 rounded-full text-sm font-medium hover:bg-orange-600">
-                  Try Now
-                </button>
+              <div className="divide-y">
+                {teams.map(team => (
+                  <Link 
+                    key={team.id} 
+                    href={`/team/${team.id}`}
+                    className="block p-3 hover:bg-gray-50 transition-colors"
+                  >
+                    <div className="flex items-center">
+                      <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center text-blue-500 mr-2">
+                        <FiUsers size={16} />
+                      </div>
+                      <div>
+                        <h4 className="font-medium text-gray-900">t/{team.name}</h4>
+                        <p className="text-xs text-gray-500 line-clamp-1">{team.description}</p>
+                      </div>
+                    </div>
+                  </Link>
+                ))}
+                {teams.length === 0 && (
+                  <div className="p-3 text-sm text-gray-500">
+                    No public teams found
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -428,6 +478,20 @@ notesData?.forEach(item => {
                     </div>
                   )}
                 </div>
+
+                <div className="mb-4">
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Post to (optional)</label>
+                  <select
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    value={newPost.team_id || ''}
+                    onChange={(e) => setNewPost({...newPost, team_id: e.target.value ? parseInt(e.target.value) : null})}
+                  >
+                    <option value="">Public post</option>
+                    {teams.map(team => (
+                      <option key={team.id} value={team.id}>t/{team.name}</option>
+                    ))}
+                  </select>
+                </div>
               </div>
               
               <div className="p-4 bg-gray-50 flex justify-end gap-3">
@@ -452,4 +516,3 @@ notesData?.forEach(item => {
     </Layout>
   );
 }
-

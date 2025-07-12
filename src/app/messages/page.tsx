@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/utils/supabase/client';
 import Layout from '@/components/Layout';
@@ -24,221 +24,287 @@ export default function MessagesPage() {
 
   const router = useRouter();
   const supabase = createClient();
+  const refreshInterval = useRef<NodeJS.Timeout>();
 
-  useEffect(() => {
-    const fetchUser = async () => {
-      const { data: { user }, error } = await supabase.auth.getUser();
-      if (error || !user) {
-        router.push('/sign-in');
-        return;
-      }
+  // Optimized fetch functions with caching
+  const fetchUser = useCallback(async () => {
+    const { data: { user }, error } = await supabase.auth.getUser();
+    if (error || !user) {
+      router.push('/sign-in');
+      return null;
+    }
 
-setAuthUser({
-  id: user.id,
-  email: user.email ?? '',
-  full_name: user.user_metadata?.full_name ?? '',
-  name: '',
-  password: '',
-  created_at: new Date(),
-  updated_at: new Date(),
-});
-
+    return {
+      id: user.id,
+      email: user.email ?? '',
+      full_name: user.user_metadata?.full_name ?? '',
+      name: '',
+      password: '',
+      created_at: new Date(),
+      updated_at: new Date(),
     };
-
-    fetchUser();
   }, [router, supabase]);
 
-  const fetchConversations = useCallback(async () => {
-    if (!authUser) return;
-    
+  const fetchConversations = useCallback(async (userId: string) => {
     try {
-      // Fetch all conversations (users you've messaged or been messaged by)
+      // Only fetch messages from the last 30 days to reduce payload
+      const thirtyDaysAgo = new Date();
+      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+      
       const { data: messagesData, error: messagesError } = await supabase
         .from('messages')
         .select('*')
-        .or(`from_id.eq.${authUser.id},to_id.eq.${authUser.id}`)
-        .order('created_at', { ascending: false });
+        .or(`from_id.eq.${userId},to_id.eq.${userId}`)
+        .gte('created_at', thirtyDaysAgo.toISOString())
+        .order('created_at', { ascending: false })
+        .limit(100); // Limit to 100 most recent messages
 
       if (messagesError) throw messagesError;
 
-      // Get unique user IDs from conversations
       const userIds = new Set<string>();
       messagesData?.forEach(msg => {
-        if (msg.from_id !== authUser.id) userIds.add(msg.from_id);
-        if (msg.to_id !== authUser.id) userIds.add(msg.to_id);
+        if (msg.from_id !== userId) userIds.add(msg.from_id);
+        if (msg.to_id !== userId) userIds.add(msg.to_id);
       });
 
-      // Fetch user details for each conversation from profiles table
-      const { data: profilesData, error: profilesError } = await supabase
-        .from('profiles')
-        .select('*')
-        .in('id', Array.from(userIds));
+      if (userIds.size === 0) return [];
 
-      if (profilesError) throw profilesError;
+      // Cache user profiles in local storage
+      const cachedProfiles = localStorage.getItem('userProfiles');
+      let profilesData: IUser[] = [];
+      
+      if (cachedProfiles) {
+        const parsed = JSON.parse(cachedProfiles);
+        profilesData = Array.from(userIds)
+          .map(id => parsed[id])
+          .filter(Boolean);
+        
+        // Check if we have all needed profiles
+        if (profilesData.length === userIds.size) {
+          // All profiles are cached
+        } else {
+          // Fetch missing profiles
+          const missingIds = Array.from(userIds).filter(id => !parsed[id]);
+          const { data: fetchedProfiles, error: profilesError } = await supabase
+            .from('profiles')
+            .select('*')
+            .in('id', missingIds);
 
-      // Map conversations with last message and user info
+          if (profilesError) throw profilesError;
+
+          profilesData = [...profilesData, ...(fetchedProfiles || [])];
+          
+          // Update cache
+          const newCache = {...parsed};
+          fetchedProfiles?.forEach(profile => {
+            newCache[profile.id] = profile;
+          });
+          localStorage.setItem('userProfiles', JSON.stringify(newCache));
+        }
+      } else {
+        // No cache, fetch all
+        const { data: fetchedProfiles, error: profilesError } = await supabase
+          .from('profiles')
+          .select('*')
+          .in('id', Array.from(userIds));
+
+        if (profilesError) throw profilesError;
+
+        profilesData = fetchedProfiles || [];
+        
+        // Create cache
+        const cache = profilesData.reduce((acc, profile) => {
+          acc[profile.id] = profile;
+          return acc;
+        }, {} as Record<string, IUser>);
+        localStorage.setItem('userProfiles', JSON.stringify(cache));
+      }
+
       const convs = Array.from(userIds).map(userId => {
-        const user = profilesData?.find(u => u.id === userId);
-        const lastMessage = messagesData?.find(msg => 
+        const user = profilesData.find(u => u.id === userId);
+        if (!user) return null;
+        
+        const lastMessage = messagesData.find(msg => 
           msg.from_id === userId || msg.to_id === userId
         );
-        return { user, lastMessage };
-      }).filter(conv => conv.user) as {user: IUser, lastMessage: IMessage}[];
+        return { user, lastMessage: lastMessage! };
+      }).filter(Boolean) as {user: IUser, lastMessage: IMessage}[];
 
-      setConversations(convs);
-
-      // If we have a selected user, load their messages
-      if (selectedUser) {
-        loadMessages(selectedUser.id);
-      }
+      return convs;
     } catch (error) {
       console.error('Error fetching conversations:', error);
       setError('Failed to load conversations');
+      return [];
     }
-  }, [authUser, supabase, selectedUser]);
+  }, [supabase]);
 
-  const loadMessages = useCallback(async (userId: string) => {
-    if (!authUser) return;
-    
+  const loadMessages = useCallback(async (userId: string, currentUserId: string) => {
     try {
+      // Only fetch messages from the last 30 days
+      const thirtyDaysAgo = new Date();
+      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+      
       const { data, error } = await supabase
         .from('messages')
         .select('*')
-        .or(`and(from_id.eq.${authUser.id},to_id.eq.${userId}),and(from_id.eq.${userId},to_id.eq.${authUser.id})`)
+        .or(
+          `and(from_id.eq.${currentUserId},to_id.eq.${userId}),and(from_id.eq.${userId},to_id.eq.${currentUserId})`
+        )
+        .gte('created_at', thirtyDaysAgo.toISOString())
         .order('created_at', { ascending: true });
 
       if (error) throw error;
 
-      setMessages(data || []);
+      return data || [];
     } catch (error) {
       console.error('Error loading messages:', error);
       setError('Failed to load messages');
+      return [];
     }
-  }, [authUser, supabase]);
+  }, [supabase]);
 
-  const fetchNotifications = useCallback(async () => {
-    if (!authUser) return;
-    
+  const fetchNotifications = useCallback(async (userId: string) => {
     try {
       const { data, error } = await supabase
         .from('notifications')
         .select('*')
-        .eq('user_id', authUser.id)
+        .eq('user_id', userId)
         .eq('read', false)
-        .order('created_at', { ascending: false });
+        .order('created_at', { ascending: false })
+        .limit(20); // Only get the 20 most recent unread notifications
 
       if (error) throw error;
 
-      setNotifications(data || []);
+      return data || [];
     } catch (error) {
       console.error('Error fetching notifications:', error);
+      return [];
     }
-  }, [authUser, supabase]);
+  }, [supabase]);
 
-  const searchUsers = useCallback(async (query: string) => {
-    if (!query.trim() || !authUser) {
-      setSearchResults([]);
-      return;
+  const searchUsers = useCallback(async (query: string, currentUserId: string) => {
+    if (!query.trim()) {
+      return [];
     }
-    
+
     try {
-      const { data, error } = await supabase
+      const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(query);
+
+      // Try exact ID match first
+      if (isUUID) {
+        const { data: exactIdData, error: exactIdError } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', query)
+          .neq('id', currentUserId)
+          .limit(1);
+
+        if (exactIdError) throw exactIdError;
+
+        if (exactIdData && exactIdData.length > 0) {
+          return exactIdData;
+        }
+      }
+
+      // Fall back to fuzzy search
+      const { data: fuzzyData, error: fuzzyError } = await supabase
         .from('profiles')
         .select('*')
-        .ilike('full_name', `%${query}%`)
-        .neq('id', authUser.id)
+        .or(`full_name.ilike.%${query}%,email.ilike.%${query}%`)
+        .neq('id', currentUserId)
         .limit(10);
 
-      if (error) throw error;
+      if (fuzzyError) throw fuzzyError;
 
-      setSearchResults(data || []);
+      return fuzzyData || [];
     } catch (error) {
       console.error('Error searching users:', error);
-      setError('Failed to search users');
+      return [];
     }
-  }, [authUser, supabase]);
+  }, [supabase]);
 
+  // Optimized refresh function
+  const refreshData = useCallback(async () => {
+    if (!authUser) return;
+
+    try {
+      const [newConvs, newNotifs] = await Promise.all([
+        fetchConversations(authUser.id),
+        fetchNotifications(authUser.id)
+      ]);
+
+      setConversations(prev => {
+        // Only update if there are actual changes
+        if (JSON.stringify(prev) !== JSON.stringify(newConvs)) {
+          return newConvs;
+        }
+        return prev;
+      });
+
+      setNotifications(prev => {
+        if (JSON.stringify(prev) !== JSON.stringify(newNotifs)) {
+          return newNotifs;
+        }
+        return prev;
+      });
+
+      if (selectedUser) {
+        const newMessages = await loadMessages(selectedUser.id, authUser.id);
+        setMessages(prev => {
+          if (JSON.stringify(prev) !== JSON.stringify(newMessages)) {
+            return newMessages;
+          }
+          return prev;
+        });
+      }
+    } catch (error) {
+      console.error('Refresh error:', error);
+    }
+  }, [authUser, fetchConversations, fetchNotifications, loadMessages, selectedUser]);
+
+  // Setup refresh interval
   useEffect(() => {
     if (authUser) {
-      fetchConversations();
-      fetchNotifications();
-      setLoading(false);
-
-      // Set up real-time subscriptions
-      const messagesSubscription = supabase
-        .channel('messages_changes')
-        .on(
-          'postgres_changes',
-          {
-            event: '*',
-            schema: 'public',
-            table: 'messages',
-            filter: `or(to_id.eq.${authUser.id},from_id.eq.${authUser.id})`
-          },
-          (payload) => {
-            if (payload.eventType === 'INSERT') {
-              setMessages(prev => [...prev, payload.new as IMessage]);
-              fetchConversations();
-              
-              // If this is a new message to us, create a notification
-              if (payload.new.to_id === authUser.id) {
-                createNotification(
-                  payload.new.from_id,
-                  'message',
-                  `New message from ${payload.new.from_id}`
-                );
-              }
-            } else if (payload.eventType === 'UPDATE') {
-              setMessages(prev => prev.map(msg => 
-                msg.id === payload.new.id ? payload.new as IMessage : msg
-              ));
-              fetchConversations();
-            } else if (payload.eventType === 'DELETE') {
-              setMessages(prev => prev.filter(msg => msg.id !== payload.old.id));
-              fetchConversations();
-            }
-          }
-        )
-        .subscribe();
-
-      const notificationsSubscription = supabase
-        .channel('notifications_changes')
-        .on(
-          'postgres_changes',
-          {
-            event: '*',
-            schema: 'public',
-            table: 'notifications',
-            filter: `user_id.eq.${authUser.id}`
-          },
-          (payload) => {
-            if (payload.eventType === 'INSERT') {
-              setNotifications(prev => [...prev, payload.new as INotification]);
-            } else if (payload.eventType === 'UPDATE') {
-              setNotifications(prev => prev.map(notif => 
-                notif.id === payload.new.id ? payload.new as INotification : notif
-              ));
-            } else if (payload.eventType === 'DELETE') {
-              setNotifications(prev => prev.filter(notif => notif.id !== payload.old.id));
-            }
-          }
-        )
-        .subscribe();
-
+      // Initial load
+      refreshData();
+      
+      // Set up interval for refreshing
+      refreshInterval.current = setInterval(refreshData, 2500);
+      
       return () => {
-        supabase.removeChannel(messagesSubscription);
-        supabase.removeChannel(notificationsSubscription);
+        if (refreshInterval.current) {
+          clearInterval(refreshInterval.current);
+        }
       };
     }
-  }, [authUser, supabase, fetchConversations]);
+  }, [authUser, refreshData]);
 
+  // Initial auth check
   useEffect(() => {
-    const timer = setTimeout(() => {
-      searchUsers(searchQuery);
+    const initialize = async () => {
+      const user = await fetchUser();
+      if (user) {
+        setAuthUser(user);
+        setLoading(false);
+      }
+    };
+
+    initialize();
+  }, [fetchUser]);
+
+  // Search debounce
+  useEffect(() => {
+    const timer = setTimeout(async () => {
+      if (searchQuery.trim() && authUser) {
+        const results = await searchUsers(searchQuery, authUser.id);
+        setSearchResults(results);
+      } else {
+        setSearchResults([]);
+      }
     }, 300);
 
     return () => clearTimeout(timer);
-  }, [searchQuery, searchUsers]);
+  }, [searchQuery, authUser, searchUsers]);
 
   const createNotification = async (userId: string, type: string, payload: string) => {
     try {
@@ -255,17 +321,6 @@ setAuthUser({
     }
   };
 
-  const markNotificationAsRead = async (notificationId: number) => {
-    try {
-      await supabase
-        .from('notifications')
-        .update({ read: true })
-        .eq('id', notificationId);
-    } catch (error) {
-      console.error('Error marking notification as read:', error);
-    }
-  };
-
   const handleSendMessage = async () => {
     if (!newMessage.trim() || !selectedUser || !authUser) return;
     
@@ -274,26 +329,19 @@ setAuthUser({
     
     try {
       if (editingMessage) {
-        // Update existing message
         const { error } = await supabase
           .from('messages')
           .update({
             content: newMessage,
-            attachment: newAttachment
+            attachment: newAttachment,
+            updated_at: new Date().toISOString()
           })
           .eq('id', editingMessage.id);
         
         if (error) throw error;
         
-        setMessages(prev => prev.map(msg => 
-          msg.id === editingMessage.id ? 
-          { ...msg, content: newMessage, attachment: newAttachment } : 
-          msg
-        ));
-        
         setEditingMessage(null);
       } else {
-        // Create new message
         const { data, error } = await supabase
           .from('messages')
           .insert({
@@ -307,7 +355,6 @@ setAuthUser({
         
         if (error) throw error;
 
-        // Create notification for the recipient
         await createNotification(
           selectedUser.id,
           'message',
@@ -317,6 +364,9 @@ setAuthUser({
       
       setNewMessage('');
       setNewAttachment('');
+      
+      // Trigger immediate refresh after sending
+      refreshData();
     } catch (error: any) {
       console.error('Error sending message:', error);
       setError(error.message || 'Failed to send message');
@@ -335,17 +385,21 @@ setAuthUser({
         .eq('id', messageId);
       
       if (error) throw error;
+      
+      // Trigger immediate refresh after deletion
+      refreshData();
     } catch (error) {
       console.error('Error deleting message:', error);
       setError('Failed to delete message');
     }
   };
 
-  const startConversation = (user: IUser) => {
+  const startConversation = async (user: IUser) => {
     setSelectedUser(user);
     setSearchQuery('');
     setSearchResults([]);
-    loadMessages(user.id);
+    const messages = await loadMessages(user.id, authUser?.id || '');
+    setMessages(messages);
   };
 
   if (loading) {
@@ -412,7 +466,7 @@ setAuthUser({
                     <FiSearch className="absolute left-3 top-2.5 text-gray-400" />
                     <input
                       type="text"
-                      placeholder="Search users..."
+                      placeholder="Search by ID, name, or email..."
                       className="w-full pl-9 pr-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
@@ -434,7 +488,7 @@ setAuthUser({
                         </div>
                         <div>
                           <p className="font-medium">{user.full_name || user.email}</p>
-                          <p className="text-xs text-gray-500">Start conversation</p>
+                          <p className="text-xs text-gray-500">ID: {user.id}</p>
                         </div>
                       </div>
                     ))}
@@ -489,10 +543,14 @@ setAuthUser({
                       </div>
                       <div>
                         <p className="font-medium">{selectedUser.full_name || selectedUser.email}</p>
+                        <p className="text-xs text-gray-500">ID: {selectedUser.id}</p>
                       </div>
                     </div>
 
-                    <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                    <div 
+                      id="messages-container"
+                      className="flex-1 overflow-y-auto p-4 space-y-4"
+                    >
                       {messages.length === 0 ? (
                         <div className="text-center py-8 text-gray-500">
                           No messages yet. Start the conversation!
@@ -611,7 +669,7 @@ setAuthUser({
                         <FiSearch className="absolute left-3 top-3 text-gray-400" />
                         <input
                           type="text"
-                          placeholder="Search users..."
+                          placeholder="Search by ID, name, or email..."
                           className="w-full pl-9 pr-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                           value={searchQuery}
                           onChange={(e) => setSearchQuery(e.target.value)}

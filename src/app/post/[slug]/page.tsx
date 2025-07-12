@@ -400,7 +400,7 @@ export default function PostPage() {
           <div className="bg-white rounded-lg shadow-lg overflow-hidden">
             <div className="p-6">
               <div className="flex items-center text-sm text-gray-500 mb-3">
-                <span className="font-medium text-gray-800">Posted by u/{post.user_id}</span>
+                <Link href={`/profiles/${post.user_id}`}> <span className="font-medium text-gray-800">Posted by u/{post.user_id}</span></Link>
                 <span className="mx-1">•</span>
                 <span>{formatDistanceToNow(new Date(post.created_at), { addSuffix: true })}</span>
               </div>

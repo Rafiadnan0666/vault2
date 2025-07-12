@@ -3,13 +3,13 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import Image from 'next/image';
 import { createClient } from '@/utils/supabase/client';
 
 export default function UpdatePassword() {
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState(false);
   const [loading, setLoading] = useState(false);
   const router = useRouter();
 
@@ -19,104 +19,124 @@ export default function UpdatePassword() {
     e.preventDefault();
     setLoading(true);
     setError(null);
+    setSuccess(false);
 
-    if (password !== confirmPassword) {
-      setError('Passwords do not match');
+    try {
+      // Validate passwords match
+      if (password !== confirmPassword) {
+        setError('Passwords do not match');
+        return;
+      }
+
+      // Validate password strength
+      if (password.length < 8) {
+        setError('Password must be at least 8 characters');
+        return;
+      }
+
+      // Update password
+      const { error: updateError } = await supabase.auth.updateUser({ 
+        password 
+      });
+
+      if (updateError) {
+        setError(updateError.message);
+        return;
+      }
+
+      setSuccess(true);
+      router.push('/sign-in?message=Password+updated+successfully');
+    } catch (err) {
+      setError('An unexpected error occurred');
+    } finally {
       setLoading(false);
-      return;
     }
-
-    const { error } = await supabase.auth.updateUser({ password });
-
-    if (error) {
-      setError(error.message);
-      setLoading(false);
-      return;
-    }
-
-    router.push('/sign-in?message=Password+updated+successfully');
   };
 
   return (
-    <div className="flex min-h-screen">
-      {/* Left: Image / Info */}
-      <div
-        className="flex min-h-screen w-1/2 items-center justify-center bg-cover bg-center bg-no-repeat px-6 text-white sm:px-8"
-        style={{ backgroundImage: "url('/assets/banner.png')" }}
-      >
-        <div className="max-w-md space-y-4 px-8 text-center">
-          <Link href="/" className="flex items-center gap-2">
-            <Image
-              src="/next.svg"
-              className="mx-auto"
-              priority
-              alt="Logo"
-              width={120}
-              height={32}
-            />
-          </Link>
-          <h2 className="text-2xl font-bold">Set your new password</h2>
-          <p>Choose a strong password to secure your account.</p>
-        </div>
-      </div>
-      {/* Right: Update Password Form */}
-      <div className="flex w-1/2 flex-col items-center justify-center bg-white px-10">
-        <div className="w-full max-w-md space-y-6">
-          <h1 className="text-center text-2xl font-bold text-gray-900">Update Your Password</h1>
-          <p className="text-center text-sm text-gray-500">
-            Enter a new password for your account.
+    <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-blue-50 via-purple-50 to-indigo-50 bg-[length:200%_200%] animate-gradient-shift p-4">
+      <div className="w-full max-w-md space-y-6 rounded-xl bg-white/90 p-8 shadow-lg backdrop-blur-sm">
+        <div className="text-center">
+          <h1 className="text-3xl font-bold text-gray-900">Update Password</h1>
+          <p className="mt-2 text-gray-600">
+            Create a new password for your account
           </p>
+        </div>
 
-          <div className="rounded-xl border px-6 py-4 shadow-lg">
-            {error && (
-              <div className="mb-4 rounded-md bg-red-50 p-3 text-sm text-red-600">{error}</div>
-            )}
-
-            <form onSubmit={handleUpdatePassword} className="space-y-4">
-              <div>
-                <label htmlFor="password" className="mb-1 block text-sm font-medium">
-                  New Password
-                </label>
-                <input
-                  id="password"
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  className="w-full rounded-md border px-3 py-2"
-                  required
-                />
-              </div>
-
-              <div>
-                <label htmlFor="confirmPassword" className="mb-1 block text-sm font-medium">
-                  Confirm New Password
-                </label>
-                <input
-                  id="confirmPassword"
-                  type="password"
-                  value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.target.value)}
-                  className="w-full rounded-md border px-3 py-2"
-                  required
-                />
-              </div>
-
-              <button
-                type="submit"
-                disabled={loading}
-                className="w-full rounded-md bg-black py-2 text-white hover:bg-gray-800"
-              >
-                {loading ? 'Updating password...' : 'Update Password'}
-              </button>
-            </form>
-
-            <div className="mt-4 text-center">
-              <span className="text-sm text-gray-500">Remember your password? </span>
-              <Link href="/sign-in" className="text-sm text-blue-600 hover:underline">
-                Sign in
-              </Link>
-            </div>
+        {error && (
+          <div className="rounded-md bg-red-50 p-3 text-sm text-red-600">
+            {error}
           </div>
+        )}
+
+        {success && (
+          <div className="rounded-md bg-green-50 p-3 text-sm text-green-600">
+            Password updated successfully! Redirecting...
+          </div>
+        )}
+
+        <form onSubmit={handleUpdatePassword} className="space-y-4">
+          <div>
+            <label htmlFor="password" className="mb-1 block text-sm font-medium text-gray-700">
+              New Password
+            </label>
+            <input
+              id="password"
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className="w-full rounded-lg border border-gray-300 px-4 py-2 focus:border-blue-500 focus:ring-blue-500"
+              required
+              minLength={8}
+              autoComplete="new-password"
+              placeholder="At least 8 characters"
+            />
+          </div>
+
+          <div>
+            <label htmlFor="confirmPassword" className="mb-1 block text-sm font-medium text-gray-700">
+              Confirm New Password
+            </label>
+            <input
+              id="confirmPassword"
+              type="password"
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              className="w-full rounded-lg border border-gray-300 px-4 py-2 focus:border-blue-500 focus:ring-blue-500"
+              required
+              minLength={8}
+              autoComplete="new-password"
+              placeholder="Confirm your password"
+            />
+          </div>
+
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full rounded-lg bg-blue-600 py-2 px-4 font-medium text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50"
+          >
+            {loading ? (
+              <span className="flex items-center justify-center">
+                <svg className="mr-2 h-4 w-4 animate-spin" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                Updating...
+              </span>
+            ) : (
+              'Update Password'
+            )}
+          </button>
+        </form>
+
+        <div className="text-center text-sm text-gray-600">
+          Remember your password?{' '}
+          <Link 
+            href="/sign-in" 
+            className="font-medium text-blue-600 hover:text-blue-500"
+          >
+            Sign in here
+          </Link>
         </div>
       </div>
     </div>
